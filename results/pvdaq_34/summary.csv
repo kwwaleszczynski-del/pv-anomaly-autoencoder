@@ -1,0 +1,5 @@
+method,threshold,alarm_episodes,episodes_outside_outage,alarm_hours,hours_to_flag_outage
+regression,2.705,32.0,29.0,167.5,0.25
+physical,5.115,20.0,19.0,169.25,0.0
+autoencoder,0.414,23.0,20.0,177.25,0.5
+inverter_status_code,,,,,241.0

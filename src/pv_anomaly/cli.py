@@ -5,6 +5,7 @@ Usage:
     python -m pv_anomaly run                                  # simulate, train, evaluate, write results and charts
     python -m pv_anomaly run --no-train                       # score with the saved models/autoencoder.pt
     python -m pv_anomaly sweep --seeds 1 2 3 4 5              # repeat the experiment on other simulated plants
+    python -m pv_anomaly real --system 34                     # real data: NREL PVDAQ system 34 (downloads ~8 MB)
     python -m pv_anomaly run --help
 
 The first year is healthy and used for training (80 % of days) and threshold calibration (20 % of days, never
@@ -25,13 +26,13 @@ import numpy as np
 import pandas as pd
 import torch
 
-from pv_anomaly import plots
+from pv_anomaly import plots, pvdaq
 from pv_anomaly.autoencoder import AEConfig, AutoencoderDetector
-from pv_anomaly.baselines import BASELINES
+from pv_anomaly.baselines import BASELINES, PhysicalBaseline, RegressionBaseline
 from pv_anomaly.detect import calibrate, smooth
 from pv_anomaly.evaluate import (event_metrics, false_alarms, ground_truth, point_metrics, pr_curve,
                                  summarize_events)
-from pv_anomaly.features import build_features, split_masks
+from pv_anomaly.features import FEATURES, build_features, split_masks
 from pv_anomaly.plant import PlantConfig
 from pv_anomaly.simulate import simulate
 
@@ -174,10 +175,150 @@ def cmd_sweep(args):
              stats[["f1_mean", "f1_std", "avg_precision_mean", "avg_precision_std"]].round(2).to_string())
 
 
+def _episodes(alarm: np.ndarray, ratio: pd.Series, mask: np.ndarray, outage: np.ndarray) -> pd.DataFrame:
+    """Alarm episodes = runs of consecutive alarmed steps among `mask` steps, with peak score / threshold."""
+    idx = np.flatnonzero(mask)
+    seq = alarm[idx]
+    run = np.cumsum(seq & ~np.r_[False, seq[:-1]])
+    rows = []
+    for k in np.unique(run[seq]):
+        pos = idx[seq & (run == k)]
+        rows.append({"start": ratio.index[pos[0]], "end": ratio.index[pos[-1]], "steps": len(pos),
+                     "peak_ratio": float(ratio.iloc[pos].max()), "outage": bool(outage[pos[0]:pos[-1] + 1].any())})
+    return pd.DataFrame(rows, columns=["start", "end", "steps", "peak_ratio", "outage"])
+
+
+def cmd_real(args):
+    """Learn normal behaviour from one year of a real PVDAQ system and score another year. There are no fault
+    labels, so the output is the list of alarm episodes, and how fast each detector flags the days on which the
+    inverter produced nothing in full sun compared with the inverter's own error code."""
+    t_start = time.time()
+    torch.manual_seed(args.seed)
+    plant = pvdaq.SYSTEMS[args.system]
+    files = pvdaq.fetch(args.system, args.start, args.end, args.data_dir / "pvdaq")
+    df = pvdaq.load(files, plant)
+    feats = build_features(df, plant)
+    day = feats["daylight"].to_numpy()
+    masks = split_masks(df.index, plant.tz, args.train_end, val_frac=0.2, seed=args.seed,
+                        train_start=args.train_start)
+    test = masks["test"] & day
+
+    # this site's ambient temperature sensor and anemometer are unreliable (long runs of 0 degF, stuck at 0 mph):
+    # the regression uses module temperature and no wind, the autoencoder drops the ambient temperature feature
+    reg = RegressionBaseline(plant, temp="t_mod", wind=False)
+    raw = {}
+    for model in (reg, PhysicalBaseline(plant)):
+        raw[model.name] = model.fit(df, masks["train"] & day).residual_z(df)
+    ae = AutoencoderDetector(AEConfig(window=args.window, latent=args.latent, epochs=args.epochs, seed=args.seed),
+                             features=tuple(f for f in FEATURES if f != "t_amb"))
+    t_train = time.time()
+    history = ae.fit(feats, masks["train"], masks["val"])
+    t_train = time.time() - t_train
+    raw["autoencoder"] = ae.score(feats)
+
+    local_day = df.index.tz_convert(plant.tz).normalize()
+    bright = df["poa"] > 50
+    g = pd.DataFrame({"irr": (df["poa"].where(bright & df["p_ac"].notna()) * 0.25 / 1000),
+                      "energy": df["p_ac"].where(bright) * 0.25, "missing": df["p_ac"].isna(),
+                      "status": df["status"]}).groupby(local_day)
+    daily = pd.DataFrame({"irradiation_kwh_m2": g["irr"].sum(), "energy_kwh": g["energy"].sum(min_count=1),
+                          "missing_share": g["missing"].mean(), "status_max": g["status"].max()})
+    daily["pr"] = (daily["energy_kwh"] / (plant.pdc0_kw * daily["irradiation_kwh_m2"])).where(
+        daily["irradiation_kwh_m2"] > 1)
+    # days without production although the sun was shining (the outage this site had in June 2016); the outage
+    # starts at the first bright step of the first such day
+    daily["dead"] = daily["pr"] < 0.05
+    dead = (test & daily["dead"].reindex(local_day).fillna(False).to_numpy()
+            & (df["poa"] > 300).to_numpy() & (df["p_ac"] < 0.01 * plant.pac0_kw).to_numpy())
+    first_dead = df.index[dead][0] if dead.any() else None
+    outage = np.zeros(len(df), bool)
+    first_status = None
+    if first_dead is not None:
+        outage[(df.index >= first_dead) & (df.index <= df.index[dead][-1])] = True
+        after = df.index[(df["status"] > 0).to_numpy() & (df.index >= first_dead)]
+        first_status = after[0] if len(after) else None
+
+    summary, episodes, ratio, alarms, thresholds = [], [], {}, {}, {}
+    for name, r in raw.items():
+        s = smooth(r, day, args.smooth, signed=True)
+        thr = calibrate(s, masks["val"] & day, args.quantile)
+        a = (s > thr).fillna(False).to_numpy() & test
+        alarms[name], ratio[name], thresholds[name] = a, s / thr, thr
+        ep = _episodes(a, ratio[name], test, outage).assign(method=name)
+        episodes.append(ep)
+        flagged = df.index[a & (df.index >= first_dead)] if first_dead is not None else []
+        summary.append({"method": name, "threshold": thr, "alarm_episodes": len(ep),
+                        "episodes_outside_outage": int((~ep["outage"]).sum()), "alarm_hours": a.sum() / 4,
+                        "hours_to_flag_outage": (flagged[0] - first_dead) / pd.Timedelta("1h") if len(flagged)
+                        else np.nan})
+    summary.append({"method": "inverter_status_code", "hours_to_flag_outage":
+                    (first_status - first_dead) / pd.Timedelta("1h") if first_status is not None else np.nan})
+    summary = pd.DataFrame(summary)
+    episodes = pd.concat(episodes, ignore_index=True)
+
+    for name in raw:
+        daily[f"{name}_peak"] = ratio[name].where(test).groupby(local_day).max()
+    daily = daily.loc[np.unique(local_day[masks["test"]])]
+
+    out = args.results_dir / f"pvdaq_{args.system}"
+    out.mkdir(parents=True, exist_ok=True)
+    summary.round(3).to_csv(out / "summary.csv", index=False)
+    episodes.round(3).to_csv(out / "episodes.csv", index=False)
+    daily.round(4).to_csv(out / "daily.csv")
+    ae.save(args.model, threshold=thresholds["autoencoder"], smooth=args.smooth, quantile=args.quantile,
+            seed=args.seed, system=args.system)
+    for r in summary.itertuples():
+        log.info("%-20s episodes %s (%s outside the outage), hours to flag the outage %.2f", r.method,
+                 r.alarm_episodes, r.episodes_outside_outage, r.hours_to_flag_outage)
+
+    ae_ep = episodes[(episodes["method"] == "autoencoder") & ~episodes["outage"]].nlargest(2, "peak_ratio")
+    windows = []
+    if first_dead is not None and first_status is not None:
+        lag = (first_status - first_dead) / pd.Timedelta("1D")
+        windows.append((first_dead - pd.Timedelta("1D"),
+                        f"Outage onset: no output from the first morning, inverter error code {lag:.0f} days later"))
+    for e in ae_ep.itertuples():
+        windows.append((e.start - pd.Timedelta("1D"),
+                        f"Autoencoder episode {e.start.tz_convert(plant.tz):%d %b %Y} "
+                        f"(peak {e.peak_ratio:.1f} x threshold), previous day for reference"))
+    years = "-".join(str(y) for y in sorted(set(local_day[masks["test"]].year)))
+    plots.real_timeline(daily, args.img_dir / f"pvdaq{args.system}_timeline.png",
+                        f"PVDAQ system {args.system}, scored period {years}: daily performance ratio")
+    plots.real_examples(df, reg.expected(df), pd.Series(alarms["autoencoder"], index=df.index), windows,
+                        plant.tz, args.img_dir / f"pvdaq{args.system}_examples.png")
+    (out / "run.json").write_text(json.dumps({
+        "system": args.system, "start": args.start, "end": args.end, "train": [args.train_start, args.train_end],
+        "files": len(files), "megabytes": round(sum(f.stat().st_size for f in files) / 1e6, 2),
+        "missing_ac_share": round(float(df["p_ac"].isna().mean()), 4),
+        "first_no_output_step": str(first_dead), "first_status_code_after": str(first_status),
+        "autoencoder": {"features": list(ae.features), "epochs_run": len(history), "train_seconds": round(t_train, 1),
+                        "latent": args.latent, "window": args.window, "seed": args.seed},
+        "smooth": args.smooth, "quantile": args.quantile, "thresholds": thresholds,
+        "runtime_seconds": round(time.time() - t_start, 1),
+    }, indent=2, default=str))
+    log.info("results in %s, charts in %s (%.0f s)", out, args.img_dir, time.time() - t_start)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pv-anomaly", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("real", help="real data: NREL PVDAQ (CC BY 4.0)")
+    p.add_argument("--system", type=int, choices=sorted(pvdaq.SYSTEMS), default=34)
+    p.add_argument("--start", default="2016-01-01")
+    p.add_argument("--end", default="2017-12-31", help="last day (inclusive)")
+    p.add_argument("--train-start", default="2017-01-01", help="healthy period used for training and validation")
+    p.add_argument("--train-end", default="2018-01-01", help="day after the training period; other days are scored")
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--window", type=int, default=8)
+    p.add_argument("--latent", type=int, default=6)
+    p.add_argument("--epochs", type=int, default=100)
+    p.add_argument("--smooth", type=int, default=8)
+    p.add_argument("--quantile", type=float, default=0.995)
+    p.add_argument("--data-dir", type=Path, default=Path(os.environ.get("PV_ANOMALY_DATA_DIR", "data")))
+    p.add_argument("--results-dir", type=Path, default=Path("results"))
+    p.add_argument("--img-dir", type=Path, default=Path("docs/img"))
+    p.add_argument("--model", type=Path, default=Path("models/autoencoder_pvdaq34.pt"))
     for name in ("simulate", "run", "sweep"):
         p = sub.add_parser(name)
         p.add_argument("--start", default="2021-01-01", help="first simulated day (local time)")
@@ -202,7 +343,7 @@ def main(argv=None):
             p.add_argument("--img-dir", type=Path, default=Path("docs/img"))
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
-    {"simulate": cmd_simulate, "run": cmd_run, "sweep": cmd_sweep}[args.cmd](args)
+    {"simulate": cmd_simulate, "run": cmd_run, "sweep": cmd_sweep, "real": cmd_real}[args.cmd](args)
 
 
 if __name__ == "__main__":

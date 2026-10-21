@@ -1,7 +1,8 @@
 """Reference detectors: residuals of simple performance models fitted on healthy data.
 
     PRBaseline          instantaneous performance ratio vs. its training median
-    RegressionBaseline  ASTM E2848-style regression P = POA * (a1 + a2*POA + a3*T_amb + a4*wind)
+    RegressionBaseline  ASTM E2848-style regression P = POA * (a1 + a2*POA + a3*T_amb + a4*wind); the
+                        temperature column and the wind term can be changed when a sensor is unreliable
     PhysicalBaseline    pvlib PVWatts with nameplate data, scaled by one factor fitted on healthy data
 
 A residual is (measured - expected) divided either by the DC nameplate (``units="kw"``: weights points by power,
@@ -71,14 +72,15 @@ class RegressionBaseline(_Baseline):
     name = "regression"
     units = "kw"  # chosen on the development seeds; the physical model is better in "pr"
 
-    def __init__(self, plant: PlantConfig, units: str | None = None):
+    def __init__(self, plant: PlantConfig, units: str | None = None, temp: str = "t_amb", wind: bool = True):
         super().__init__(plant, units)
-        self.coef = np.zeros(4)
+        self.temp, self.wind = temp, wind
+        self.coef = np.zeros(4 if wind else 3)
 
-    @staticmethod
-    def _design(df: pd.DataFrame) -> np.ndarray:
+    def _design(self, df: pd.DataFrame) -> np.ndarray:
         poa = df["poa"].to_numpy()
-        return np.column_stack([poa, poa**2, poa * df["t_amb"].to_numpy(), poa * df["wind"].to_numpy()])
+        cols = [poa, poa**2, poa * df[self.temp].to_numpy()]
+        return np.column_stack(cols + [poa * df["wind"].to_numpy()] if self.wind else cols)
 
     def fit(self, df, mask):
         use = self._usable(df, mask)

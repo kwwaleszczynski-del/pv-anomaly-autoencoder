@@ -17,7 +17,7 @@
     "patience": 10,
     "seed": 42,
     "epochs_run": 100,
-    "train_seconds": 21.3,
+    "train_seconds": 26.2,
     "trained": true
   },
   "smooth": 8,
@@ -36,7 +36,7 @@
     "test_positive": 9512
   },
   "events": 20,
-  "runtime_seconds": 27.0,
+  "runtime_seconds": 32.8,
   "torch": "2.6.0+cu124",
   "numpy": "2.5.1"
 }

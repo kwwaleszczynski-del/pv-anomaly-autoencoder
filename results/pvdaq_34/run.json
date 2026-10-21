@@ -1,0 +1,39 @@
+{
+  "system": 34,
+  "start": "2016-01-01",
+  "end": "2017-12-31",
+  "train": [
+    "2017-01-01",
+    "2018-01-01"
+  ],
+  "files": 731,
+  "megabytes": 7.99,
+  "missing_ac_share": 0.0302,
+  "first_no_output_step": "2016-06-04 14:30:00+00:00",
+  "first_status_code_after": "2016-06-14 15:30:00+00:00",
+  "autoencoder": {
+    "features": [
+      "p_norm",
+      "pr",
+      "poa",
+      "kc",
+      "t_mod",
+      "sun_el",
+      "sun_az_sin",
+      "sun_az_cos"
+    ],
+    "epochs_run": 100,
+    "train_seconds": 23.8,
+    "latent": 6,
+    "window": 8,
+    "seed": 42
+  },
+  "smooth": 8,
+  "quantile": 0.995,
+  "thresholds": {
+    "regression": 2.705247487756778,
+    "physical": 5.114972905372007,
+    "autoencoder": 0.41352300515398366
+  },
+  "runtime_seconds": 28.8
+}

@@ -45,3 +45,9 @@ def test_pr_baseline_flags_drop_and_ignores_dark(data):
     assert model.residual_z(data.assign(p_ac=0.5 * data["p_ac"])).median() < -5
     dark = data.assign(poa=10.0)
     assert model.residual_z(dark).isna().all()
+
+
+def test_regression_without_wind_on_module_temperature(data):
+    data["p_ac"] = data["poa"] * (0.85 - 1e-4 * data["poa"] - 2e-3 * data["t_mod"])
+    model = RegressionBaseline(PLANT, temp="t_mod", wind=False).fit(data.drop(columns="wind"), np.ones(len(data), bool))
+    assert model.coef == pytest.approx([0.85, -1e-4, -2e-3], rel=1e-6)

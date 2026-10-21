@@ -48,3 +48,10 @@ def test_split_masks_whole_days():
     val_days = pd.Series(m["val"], index=local.normalize()).groupby(level=0).agg(["min", "max"])
     assert (val_days["min"] == val_days["max"]).all()  # a day is entirely in or out of validation
     assert abs(val_days["max"].iloc[:365].mean() - 0.2) < 0.01
+
+
+def test_split_masks_train_after_test():
+    index = pd.date_range("2016-01-01", "2017-12-31", freq="15min", tz="Etc/GMT+8").tz_convert("UTC")
+    m = split_masks(index, "Etc/GMT+8", "2018-01-01", train_start="2017-01-01", seed=0)
+    local = index.tz_convert("Etc/GMT+8")
+    assert (local[m["test"]].year == 2016).all() and (local[m["train"] | m["val"]].year == 2017).all()

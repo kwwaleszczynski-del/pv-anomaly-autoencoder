@@ -171,3 +171,57 @@ def pr_curves(curves: dict[str, tuple[np.ndarray, np.ndarray]], ap: dict[str, fl
     ax.set_title("Precision-recall, all fault types pooled", loc="left")
     ax.legend(loc="lower left", fontsize=8)
     _save(fig, path)
+
+
+def real_timeline(daily: pd.DataFrame, path: Path, title: str, methods=("autoencoder", "regression")):
+    """A real system's test year: daily performance ratio, then each method's daily peak score / threshold.
+    Light grey days: AC power missing; darker grey: no production in bright sun."""
+    fig, axes = plt.subplots(1 + len(methods), 1, figsize=(10, 1.9 * (1 + len(methods)) + 0.5), sharex=True)
+    x = daily.index.tz_localize(None)
+    one = pd.Timedelta("1D")
+    for ax in axes:
+        for d in x[(daily["missing_share"] > 0.5).to_numpy()]:
+            ax.axvspan(d, d + one, color="#ecebe7", lw=0)
+        for d in x[daily["dead"].to_numpy()]:
+            ax.axvspan(d, d + one, color="#cfcdc6", lw=0)
+    axes[0].plot(x, daily["pr"], ".", ms=3, color=MUTED)
+    axes[0].set_ylabel("daily PR")
+    axes[0].set_ylim(-0.03, max(0.8, float(daily["pr"].max()) + 0.05))
+    axes[0].set_title(title, loc="left")
+    status = x[(daily["status_max"] > 0).to_numpy() & ~(daily["missing_share"] > 0.5).to_numpy()]
+    axes[0].plot(status, np.full(len(status), 0.02), "|", ms=8, color=INK, label="inverter error code reported")
+    axes[0].legend(loc="lower left", fontsize=8)
+    for ax, m in zip(axes[1:], methods):
+        ax.plot(x, daily[f"{m}_peak"], color=METHODS[m][1], lw=1.0)
+        ax.axhline(1.0, color=INK, lw=0.8)
+        ax.set_yscale("log")
+        ax.set_ylabel("peak score / threshold")
+        ax.set_title(_label(m), loc="left")
+    axes[-1].xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+    fig.text(0.01, 0.005, "Darker grey: days without production in bright sun; light grey: no AC power data. "
+             "Alarms above the black line.", fontsize=7.5, color=MUTED)
+    _save(fig, path)
+
+
+def real_examples(df: pd.DataFrame, expected: pd.Series, alarm: pd.Series, windows: list[tuple[pd.Timestamp, str]],
+                  tz: str, path: Path, days: int = 2):
+    """Measured vs. expected AC power on selected days of a real system, autoencoder alarms shaded."""
+    fig, axes = plt.subplots(len(windows), 1, figsize=(10, 2.2 * len(windows)), squeeze=False)
+    for ax, (start, title) in zip(axes[:, 0], windows):
+        t0 = start.tz_convert(tz).normalize()
+        sel = (df.index >= t0) & (df.index < t0 + pd.Timedelta(days=days))
+        x = df.index[sel].tz_convert(tz).tz_localize(None)
+        ax.fill_between(x, 0, 1, where=alarm.to_numpy(bool)[sel], transform=ax.get_xaxis_transform(), color=ALARM,
+                        lw=0, step="mid", label="autoencoder alarm")
+        ax.plot(x, expected[sel], color="#9a9893", lw=1.2, label="expected (regression on POA, module temp.)")
+        ax.plot(x, df["p_ac"][sel], color=METHODS["autoencoder"][1], lw=1.2, label="measured")
+        ax.set_title(title, loc="left", fontsize=9)
+        ax.set_ylabel("AC power [kW]")
+        ax.set_xlim(x[0], x[-1])
+        ax.set_ylim(bottom=0)
+        ax.xaxis.set_major_locator(mdates.HourLocator(byhour=[0, 12]))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b %H:%M"))
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper right", ncol=3, fontsize=8, bbox_to_anchor=(0.99, 1.0))
+    fig.suptitle("Local standard time", x=0.01, ha="left", fontsize=9, color=MUTED)
+    _save(fig, path)

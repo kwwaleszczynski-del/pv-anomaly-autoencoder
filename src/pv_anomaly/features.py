@@ -44,10 +44,11 @@ def build_features(df: pd.DataFrame, plant: PlantConfig) -> pd.DataFrame:
 
 
 def split_masks(index: pd.DatetimeIndex, tz: str, train_end: str, val_frac: float = 0.2,
-                seed: int = 0) -> dict[str, np.ndarray]:
-    """Boolean masks ``train``, ``val`` (random whole local days before `train_end`) and ``test`` (the rest)."""
+                seed: int = 0, train_start: str | None = None) -> dict[str, np.ndarray]:
+    """Boolean masks ``train``, ``val`` (random whole local days of [`train_start`, `train_end`)) and ``test``
+    (all other days)."""
     day = index.tz_convert(tz).normalize().tz_localize(None)
-    before = day < pd.Timestamp(train_end)
+    before = (day < pd.Timestamp(train_end)) & (day >= pd.Timestamp(train_start or day.min()))
     days = np.unique(day[before])
     rng = np.random.default_rng(seed)
     val_days = rng.choice(days, size=int(round(val_frac * len(days))), replace=False)

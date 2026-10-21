@@ -7,6 +7,8 @@ already use? This project compares a **dense PyTorch autoencoder** with three st
 threshold, an ASTM E2848-style regression and a pvlib physical model) on **simulated 15-minute data with injected,
 labelled faults**: soiling, shading, string outages, inverter derating and irradiance-sensor drift. Because the faults
 are known exactly, every method can be scored per fault type, including how long it takes to raise the first alarm.
+A second experiment runs the same detectors on **two years of real data** from a public NREL PVDAQ system, where
+they catch an inverter outage that the inverter's own error code reported 10 days late.
 
 ## Key results
 
@@ -62,6 +64,44 @@ The score of the two best methods over the whole test period, relative to its th
 ![score timeline](docs/img/score_timeline.png)
 
 ![time to detection](docs/img/time_to_detection.png)
+
+## Real data: NREL PVDAQ system 34
+
+The same detectors on a real rooftop system: [PVDAQ](https://doi.org/10.25984/1846021) system 34 in Las Vegas, NV
+(146.6 kWp, 611 mono-Si modules at 11.2° facing south, one 135 kW central inverter), 15-minute data for 2016-2017.
+`python -m pv_anomaly real` downloads the 731 daily files (8 MB) from the public OEDI bucket.
+
+**What the data contain.** On **4 June 2016 at 06:30** the inverter stopped producing and stayed at zero for 13 sunny
+days while its status code still read 0. The first error code arrived on 14 June, **10 days later**. After that the
+AC channels go missing until 8 July. 2017 has no such days. The site's sensors have their own problems: the ambient
+temperature sensor reads exactly 0 °F for most winter hours, and the anemometer is stuck at zero much of the time.
+
+**Setup.** No fault labels exist, so precision and recall cannot be computed. Instead, the detectors learn normal
+behaviour from the healthy year 2017 (thresholds on 20 % of its days) and score 2016, which contains the outage.
+The direction of time does not matter for this purpose: only one healthy year of the same plant is needed. Because
+of the broken sensors, the autoencoder drops the ambient temperature feature and the regression uses module
+temperature without a wind term. Everything else is unchanged from the synthetic experiment: architecture, smoothing,
+and the 99.5 % validation quantile.
+
+| | Time to flag the outage | Alarm episodes outside the outage (2016) |
+|---|---|---|
+| **Autoencoder, PR residual** | 0.5 h | 20 |
+| Regression (module temperature) | 0.25 h | 29 |
+| Physical model (pvlib) | 0 h | 19 |
+| Inverter error code | **241 h (10 days)** | - |
+
+- **Any expected-power model beats the inverter's own status code by days.** That is the practical lesson here: a
+  zero-output day in full sun is easy to see, but only if someone compares power with irradiance.
+- **The remaining alarms look like weather, not faults.** The autoencoder's two strongest episodes outside the outage
+  fall on broken-cloud days, when the pyranometer and the array see different clouds (below). That is the same
+  failure mode as in the simulation. The autoencoder raises about 1.7 such episodes per month, the regression 2.4.
+- **What cannot be checked:** whether any of the other episodes were real, small faults. The daily performance ratio
+  also drifts down in the two weeks before the outage, and a few late-May alarms coincide with that. Without
+  maintenance logs it is impossible to say whether this was a precursor or just the summer heat.
+
+![PVDAQ timeline](docs/img/pvdaq34_timeline.png)
+
+![PVDAQ examples](docs/img/pvdaq34_examples.png)
 
 ## Data: a simulated plant with known faults
 
@@ -155,7 +195,8 @@ PR units). Seed 42 and the sweep seeds 1-5 were run once with those settings.
 - **Clean training year assumed.** Training on data that already contains faults is not tested.
 - **A dense window autoencoder is the simplest choice.** LSTM or convolutional autoencoders, and training with
   contaminated data, are natural next steps.
-- Everything is one plant design at one location.
+- Everything simulated is one plant design at one location; the real-data check is one small rooftop system
+  without fault labels.
 
 ## Run it
 
@@ -169,8 +210,11 @@ python -m pv_anomaly run
 (per-type and per-event metrics, false alarms, training history, `run.json`), the charts in `docs/img/` and the
 trained network in `models/autoencoder.pt`. The whole run takes about 40 seconds on a laptop CPU.
 `python -m pv_anomaly run --no-train` scores with the saved model, and `python -m pv_anomaly sweep --seeds 1 2 3 4 5`
-repeats the experiment on other simulated plants (about 3 minutes). `--help` lists all options (window, bottleneck,
-smoothing, threshold quantile, seed). Everything is seeded (`--seed 42` by default) and runs on the CPU.
+repeats the experiment on other simulated plants (about 3 minutes). `python -m pv_anomaly real` downloads PVDAQ
+system 34 (8 MB, cached in `data/pvdaq/`, not part of the repository) and writes `results/pvdaq_34/` and its charts
+in about two minutes on the first run, download included. `--help` lists all options (window, bottleneck,
+smoothing, threshold quantile, seed, periods).
+Everything is seeded (`--seed 42` by default) and runs on the CPU.
 
 ```
 src/pv_anomaly/
@@ -181,11 +225,18 @@ src/pv_anomaly/
   autoencoder.py  dense window autoencoder: training, scoring, save/load
   detect.py       smoothing and threshold calibration
   evaluate.py     labels, point/event metrics, time to detection, false alarms
+  pvdaq.py        NREL PVDAQ download and loader (units, time zone, sensor dropouts)
   plots.py        charts
   cli.py          command line interface
-tests/            simulator, features, baselines, autoencoder and metric tests (no network access)
+tests/            simulator, features, baselines, autoencoder, metric and loader tests (no network access)
 ```
 
 ## License
 
 MIT. Physics by [pvlib](https://github.com/pvlib/pvlib-python) (BSD-3-Clause).
+
+Real data: Deline, C., Perry, K., Deceglie, M., Muller, M., Sekulic, W., & Jordan, D. (2021). *Photovoltaic Data
+Acquisition (PVDAQ) Public Datasets* [Data set]. Open Energy Data Initiative (OEDI), National Renewable Energy
+Laboratory. https://doi.org/10.25984/1846021, licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The raw files are downloaded on demand and not included
+here; `results/pvdaq_34/` holds daily aggregates and alarm episodes derived from them.
