@@ -1,0 +1,42 @@
+{
+  "seed": 42,
+  "start": "2021-01-01",
+  "end": "2024-01-01",
+  "train_end": "2022-01-01",
+  "autoencoder": {
+    "window": 8,
+    "hidden": [
+      64,
+      32
+    ],
+    "latent": 6,
+    "epochs": 100,
+    "batch_size": 256,
+    "lr": 0.001,
+    "weight_decay": 1e-05,
+    "patience": 10,
+    "seed": 42,
+    "epochs_run": 100,
+    "train_seconds": 21.3,
+    "trained": true
+  },
+  "smooth": 8,
+  "quantile": 0.995,
+  "thresholds": {
+    "pr_threshold": 1.7463113574848455,
+    "regression": 3.4413621255242197,
+    "physical": 1.3084824313761927,
+    "autoencoder": 0.37593907222151757,
+    "autoencoder_mse": 0.257509948387742
+  },
+  "steps": {
+    "train": 11037,
+    "val": 2897,
+    "test_evaluated": 23271,
+    "test_positive": 9512
+  },
+  "events": 20,
+  "runtime_seconds": 27.0,
+  "torch": "2.6.0+cu124",
+  "numpy": "2.5.1"
+}

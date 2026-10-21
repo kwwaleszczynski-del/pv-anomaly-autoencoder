@@ -1,0 +1,6 @@
+method,false_alarm_episodes,healthy_days,per_30_days
+pr_threshold,75,452.8,4.97
+regression,13,452.8,0.861
+physical,18,452.8,1.193
+autoencoder,45,452.8,2.982
+autoencoder_mse,17,452.8,1.126

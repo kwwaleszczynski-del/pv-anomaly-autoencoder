@@ -1,0 +1,6 @@
+method,precision_mean,precision_std,recall_mean,recall_std,f1_mean,f1_std,avg_precision_mean,avg_precision_std,events_detected_mean,events_detected_std,events_mean,events_std,false_alarms_per_30d_mean,false_alarms_per_30d_std
+pr_threshold,0.925,0.014,0.187,0.024,0.31,0.034,0.573,0.052,14.0,1.581,20.0,0.0,2.243,0.313
+regression,0.941,0.014,0.273,0.087,0.418,0.106,0.724,0.061,13.8,2.864,20.0,0.0,2.63,0.474
+physical,0.943,0.023,0.227,0.057,0.363,0.079,0.543,0.045,13.8,1.304,20.0,0.0,1.484,0.629
+autoencoder,0.966,0.006,0.523,0.082,0.675,0.068,0.891,0.02,14.6,2.608,20.0,0.0,1.03,0.293
+autoencoder_mse,0.873,0.041,0.123,0.07,0.21,0.102,0.579,0.062,12.8,3.701,20.0,0.0,1.161,0.576
