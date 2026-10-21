@@ -1,6 +1,6 @@
 # Finding faults in a PV plant: autoencoder vs. simple baselines
 
-![tests](https://github.com/OWNER/pv-anomaly-autoencoder/actions/workflows/ci.yml/badge.svg)
+![tests](https://github.com/kwwaleszczynski-del/pv-anomaly-autoencoder/actions/workflows/ci.yml/badge.svg)
 
 Can a small neural network find faults in a solar plant's SCADA data better than the methods performance engineers
 already use? This project compares a **dense PyTorch autoencoder** with three standard baselines (a performance-ratio
