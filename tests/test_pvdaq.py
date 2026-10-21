@@ -27,7 +27,7 @@ def test_load_units_time_zone_and_gaps(tmp_path):
                     "wind_speed_mph__2691,system_id\n2016-06-01 01:00:00,139,50.0,0.0,1.0,34\n")
     df = load([day1, day2], SYSTEMS[34])
     assert df.index[0] == pd.Timestamp("2016-06-01 08:00", tz="UTC")  # local standard time UTC-8
-    assert len(df) == 5 and (np.diff(df.index.asi8) == 15 * 60 * 10**9).all()
+    assert len(df) == 5 and (df.index.to_series().diff().dropna() == pd.Timedelta("15min")).all()
     assert df["p_ac"].iloc[:3].tolist() == [0.0, 50.0, 100.0]  # hectowatt -> kW, negative tare clipped
     assert df["t_mod"].iloc[0] == pytest.approx(20.0) and np.isnan(df["t_mod"].iloc[1])
     assert df["t_amb"].iloc[1] == pytest.approx(100.0) and np.isnan(df["t_amb"].iloc[2])

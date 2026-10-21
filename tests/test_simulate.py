@@ -24,7 +24,7 @@ def test_reproducible_with_seed(sim):
 def test_regular_grid_and_no_gaps(sim):
     df, _ = sim
     assert df.index.tz is not None
-    assert (np.diff(df.index.asi8) == 15 * 60 * 10**9).all()
+    assert (df.index.to_series().diff().dropna() == pd.Timedelta("15min")).all()  # resolution-independent (ns/us)
     assert not df[["p_ac", "poa", "t_mod", "t_amb", "wind"]].isna().any().any()
 
 
