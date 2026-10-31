@@ -23,7 +23,10 @@ threshold set to the same false-alarm budget on healthy validation days. Pooled 
 | PR threshold | 0.91 | 0.33 | 0.48 | 0.70 | 15 / 20 | 5.0 |
 | Autoencoder, MSE (textbook score) | 0.91 | 0.16 | 0.28 | 0.58 | 15 / 20 | 1.1 |
 
-The ranking holds on five other simulated plants (new weather, faults, split and network seed each time):
+On five other simulated plants (new weather, faults, split and network seed each time) the PR-residual autoencoder
+has the highest F1 and average precision on every seed (F1 0.61-0.77). The baselines do not keep their order: the
+best of them is the regression on three seeds and the physical model on two, and on seed 42 (the table above) the
+regression comes last of the three (`results/sweep_seeds.csv`):
 
 | Method | F1, mean ± sd | Avg. precision | False alarms / 30 days |
 |---|---|---|---|
@@ -71,10 +74,14 @@ The same detectors on a real rooftop system: [PVDAQ](https://doi.org/10.25984/18
 (146.6 kWp, 611 mono-Si modules at 11.2° facing south, one 135 kW central inverter), 15-minute data for 2016-2017.
 `python -m pv_anomaly real` downloads the 731 daily files (8 MB) from the public OEDI bucket.
 
-**What the data contain.** On **4 June 2016 at 06:30** the inverter stopped producing and stayed at zero for 13 sunny
-days while its status code still read 0. The first error code arrived on 14 June, **10 days later**. After that the
-AC channels go missing until 8 July. 2017 has no such days. The site's sensors have their own problems: the ambient
-temperature sensor reads exactly 0 °F for most winter hours, and the anemometer is stuck at zero much of the time.
+**What the data contain.** On **4 June 2016 at 06:00** (local standard time) the inverter stopped producing while
+its status code still read 0. The first error code arrived on 14 June, **10 days later**. The logger recorded zero
+output until 16 June; then the inverter channels go missing until output returns on 8 July, 34 days after the stop
+(the course of this outage and the site's timestamp conventions are in the shared
+[PVDAQ site notes](https://github.com/kwwaleszczynski-del/pv-outage-classifier/blob/main/PVDAQ_SITE_NOTES.md)).
+Detection times below count from 06:30, the first step above 300 W/m². 2017 has no such days. The site's sensors
+have their own problems: the ambient temperature sensor reads exactly 0 °F for most winter hours, and the anemometer
+is stuck at zero much of the time.
 
 **Setup.** No fault labels exist, so precision and recall cannot be computed. Instead, the detectors learn normal
 behaviour from the healthy year 2017 (thresholds on 20 % of its days) and score 2016, which contains the outage.
