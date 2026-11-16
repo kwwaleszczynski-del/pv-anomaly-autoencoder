@@ -1,6 +1,6 @@
-method,precision,recall,f1,avg_precision,events_detected,events,false_alarms_per_30d
-pr_threshold,0.905,0.331,0.485,0.702,15,20,4.97
-regression,0.983,0.23,0.373,0.765,15,20,0.861
-physical,0.971,0.319,0.481,0.644,15,20,1.193
-autoencoder,0.942,0.654,0.772,0.891,17,20,2.982
-autoencoder_mse,0.911,0.163,0.276,0.584,15,20,1.126
+method,avg_precision,recall_at_fpr_0.5pct,events_detected,events_detectable,events,events_by_chance,events_by_chance_max,precision,recall,f1,test_fpr,false_alarms_per_30d
+pr_threshold,0.702,0.262,7,17,20,0.083,1,0.905,0.331,0.485,0.013,4.97
+regression,0.765,0.267,6,17,20,0.083,1,0.983,0.23,0.373,0.002,0.861
+physical,0.644,0.326,7,17,20,0.167,1,0.971,0.319,0.481,0.004,1.193
+autoencoder,0.911,0.562,15,17,20,1.583,3,0.944,0.694,0.8,0.016,3.048
+autoencoder_mse,0.6,0.161,5,17,20,0.083,1,0.91,0.175,0.294,0.007,1.126

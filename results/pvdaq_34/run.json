@@ -23,7 +23,7 @@
       "sun_az_cos"
     ],
     "epochs_run": 100,
-    "train_seconds": 23.8,
+    "train_seconds": 47.0,
     "latent": 6,
     "window": 8,
     "seed": 42
@@ -33,7 +33,7 @@
   "thresholds": {
     "regression": 2.705247487756778,
     "physical": 5.114972905372007,
-    "autoencoder": 0.41352300515398366
+    "autoencoder": 0.40467192541342223
   },
-  "runtime_seconds": 28.8
+  "runtime_seconds": 64.9
 }

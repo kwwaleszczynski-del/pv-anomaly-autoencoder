@@ -12,53 +12,89 @@ they catch an inverter outage that the inverter's own error code reported 10 day
 
 ## Key results
 
-Test period: two years of a synthetic 1 MWp plant (seed 42) with 20 injected faults (4 per type). Every method has its
-threshold set to the same false-alarm budget on healthy validation days. Pooled over all fault types:
+Test period: two years of a synthetic 1 MWp plant (seed 42) with 20 injected faults, 4 per type. Three of them (two
+shading events in spring and autumn, one inverter derate in winter) never change the output by 3 % in daylight, so
+17 events can be detected at all.
 
-| Method | Precision | Recall | F1 | Avg. precision | Events detected | False alarms / 30 healthy days |
+Every threshold is set to a 0.5 % false-positive rate on held-out healthy days. On the test period these rates drift
+apart (0.16-1.6 %, second table), so the first table compares the methods without a threshold (average precision) and
+at one matched false-positive rate on the healthy test steps:
+
+| Method | Avg. precision | Recall at 0.5 % FPR | Events detected (of 17) | Events detected by chance |
+|---|---|---|---|---|
+| **Autoencoder, PR residual** | **0.91** | **0.56** | **15** | 1.6 |
+| Regression (ASTM E2848) | 0.77 | 0.27 | 6 | 0.1 |
+| Physical model (pvlib) | 0.64 | 0.33 | 7 | 0.2 |
+| PR threshold | 0.70 | 0.26 | 7 | 0.1 |
+| Autoencoder, MSE (textbook score) | 0.60 | 0.16 | 5 | 0.1 |
+
+An event counts as detected when at least half of its affected daylight steps raise an alarm. "By chance" is the same
+count after shifting each method's alarms by whole days (12 shifts between 29 and 643 days), which keeps their daily
+and seasonal pattern but breaks their link to the faults. A looser rule, one alarm anywhere in the affected part of an
+event, credits every method with 15-17 events, but shifted alarms already reach 6.5-9.7 of them on average and up to
+13 (`results/chance.csv`), so it says little.
+
+The operating point that the calibrated threshold actually gives on the test period:
+
+| Method | Precision | Recall | F1 | FPR on healthy test steps | False alarms / 30 healthy days |
+|---|---|---|---|---|---|
+| Autoencoder, PR residual | 0.94 | 0.69 | 0.80 | 1.6 % | 3.0 |
+| Regression (ASTM E2848) | 0.98 | 0.23 | 0.37 | 0.16 % | 0.9 |
+| Physical model (pvlib) | 0.97 | 0.32 | 0.48 | 0.38 % | 1.2 |
+| PR threshold | 0.91 | 0.33 | 0.48 | 1.3 % | 5.0 |
+| Autoencoder, MSE | 0.91 | 0.18 | 0.29 | 0.67 % | 1.1 |
+
+On five other simulated plants (new weather, faults, split and network seed each time) the ranking holds, but seed 42
+is a favourable draw for the autoencoder's event count. On all six seeds (42 and 1-5) the PR-residual autoencoder has
+the highest average precision, recall at the matched rate, F1 and number of detected events; with six seeds that is a
+consistent pattern, not a significance test. Mean ± standard deviation over seeds 1-5 (`results/sweep_seeds.csv`):
+
+| Method | Avg. precision | Recall at 0.5 % FPR | Events detected (of 81) | by chance | FPR on healthy test steps | False alarms / 30 days |
 |---|---|---|---|---|---|---|
-| **Autoencoder, PR residual** | 0.94 | **0.65** | **0.77** | **0.89** | **17 / 20** | 3.0 |
-| Regression (ASTM E2848) | 0.98 | 0.23 | 0.37 | 0.77 | 15 / 20 | 0.9 |
-| Physical model (pvlib) | 0.97 | 0.32 | 0.48 | 0.64 | 15 / 20 | 1.2 |
-| PR threshold | 0.91 | 0.33 | 0.48 | 0.70 | 15 / 20 | 5.0 |
-| Autoencoder, MSE (textbook score) | 0.91 | 0.16 | 0.28 | 0.58 | 15 / 20 | 1.1 |
+| **Autoencoder, PR residual** | **0.90 ± 0.02** | **0.49 ± 0.07** | **37** | 4.67 | 0.6 ± 0.2 % | 0.9 ± 0.4 |
+| Regression (ASTM E2848) | 0.72 ± 0.06 | 0.26 ± 0.08 | 18 | 2.25 | 0.6 ± 0.1 % | 2.6 ± 0.5 |
+| Physical model (pvlib) | 0.54 ± 0.04 | 0.23 ± 0.06 | 12 | 1.00 | 0.5 ± 0.2 % | 1.5 ± 0.6 |
+| PR threshold | 0.57 ± 0.05 | 0.18 ± 0.02 | 8 | 0.58 | 0.6 ± 0.2 % | 2.2 ± 0.3 |
+| Autoencoder, MSE | 0.58 ± 0.06 | 0.11 ± 0.04 | 10 | 1.00 | 0.7 ± 0.4 % | 1.3 ± 0.6 |
 
-On five other simulated plants (new weather, faults, split and network seed each time) the PR-residual autoencoder
-has the highest F1 and average precision on every seed (F1 0.61-0.77). The baselines do not keep their order: the
-best of them is the regression on three seeds and the physical model on two, and on seed 42 (the table above) the
-regression comes last of the three (`results/sweep_seeds.csv`):
+Events are summed over the five seeds (5-9 detected per seed for the autoencoder). On these seeds the autoencoder's
+test false-positive rate is in line with the other methods, so the 1.6 % on seed 42 belongs to that seed's draw. The
+baselines' order changes with the seed and the metric.
 
-| Method | F1, mean ± sd | Avg. precision | False alarms / 30 days |
-|---|---|---|---|
-| **Autoencoder, PR residual** | **0.68 ± 0.07** | **0.89 ± 0.02** | 1.0 ± 0.3 |
-| Regression (ASTM E2848) | 0.42 ± 0.11 | 0.72 ± 0.06 | 2.6 ± 0.5 |
-| Physical model (pvlib) | 0.36 ± 0.08 | 0.54 ± 0.04 | 1.5 ± 0.6 |
-| PR threshold | 0.31 ± 0.03 | 0.57 ± 0.05 | 2.2 ± 0.3 |
-| Autoencoder, MSE | 0.21 ± 0.10 | 0.58 ± 0.06 | 1.2 ± 0.6 |
+- **The autoencoder flags faulty periods more completely at the same false-positive rate**: recall 0.56 against at
+  most 0.33 for the baselines when every method flags 0.5 % of the healthy test steps. Its higher recall at the
+  calibrated threshold (0.69) is partly bought with a test false-positive rate of 1.6 %, three times its calibration
+  rate.
+- **It wins on slow faults**: it detects all four soiling and all four sensor-drift events (at least half of their
+  affected steps flagged); the regression and the PR threshold detect none of them, the physical model one soiling
+  event. Its first
+  alarm on these events comes at a median loss of 3 %, which is where the labels start, so the labelling and not the
+  detector sets that floor. Soiling is flagged a median 7 days after it starts.
+- **Inverter derating and shading are small classes**, so their numbers rest on few events: at the matched rate the
+  regression catches more derating (recall 0.86 against 0.72) and the physical model more shading (0.54 against
+  0.47). Per-type F1 at the calibrated threshold is not shown: on classes this small it mostly reflects each method's
+  test false-positive rate.
+- **Part of the lead over the baselines is integration time.** The autoencoder scores a 2-hour window and is then
+  smoothed like the baselines, so its score covers about twice as many steps. At equal integration the average
+  precision of autoencoder and regression is 0.88 against 0.77 (8 steps) and 0.91 against 0.83 (15-16 steps): the
+  lead shrinks from 0.15 with the default settings to 0.12 and 0.08, but does not disappear
+  (`results/integration.csv`).
+- **With the same network and the same integration, the score decides**: the textbook mean squared error over all
+  inputs reaches an average precision of 0.60, the signed residual of the performance-ratio channel 0.91. Squared
+  errors are dominated by cloud noise and a steady 10 % power loss barely moves them; a signed mean lets a consistent
+  shortfall accumulate while noise cancels.
+- **False alarms come from broken clouds**: 45 of the autoencoder's 46 false-alarm episodes on the test plant
+  start on broken-cloud days, when the single pyranometer and the 1 MWp array see different clouds.
 
-- **The autoencoder flags faulty periods far more completely**: recall 0.65 vs. at most 0.33 at similar precision.
-  Event-level detection is closer: 73 of 100 events across the five seeds vs. 69-70 for the baselines.
-- **It wins on slow faults**: soiling and sensor drift are caught at a median loss of **3.3 %** (labels start at
-  3 %), against 5.4 % (soiling) and 4.6 % (drift) for the regression. Soiling is flagged after a median 7 days
-  against 12.
-- **It is worse on inverter derating** (F1 0.42 vs. 0.84 for the regression). A healthy plant with a DC/AC ratio of
-  1.25 clips at 800 kW on bright days, the network has learned that a flat top is normal and partly accepts a lower
-  flat top too. **Shading is hard for every method**: it affects a few low-sun hours, mostly in winter.
-- **How the reconstruction error is scored matters more than the network.** The textbook score, mean squared error
-  over all inputs, is the worst method here: squared errors are dominated by cloud noise, and a steady 10 % power
-  loss barely moves them. The signed residual of one channel, the performance ratio, averaged over time, lets a
-  consistent shortfall accumulate while noise cancels. That one change lifts average precision from 0.58 to 0.89.
-- **False alarms come from broken clouds**: 43 of the autoencoder's 45 false alarms on the test plant fall on
-  broken-cloud days, when the single pyranometer and the 1 MWp array see different clouds.
-
-![F1 by fault type](docs/img/f1_by_fault.png)
+![recall by fault type](docs/img/recall_by_fault.png)
 
 ![precision-recall curves](docs/img/pr_curves.png)
 
 ### What the faults and alarms look like
 
 The last days of one event per type. Grey: what the healthy plant would have produced (ground truth), blue: the
-measurement, red: autoencoder alarms. In the soiling and derate panels the alarms stop once the fault is fixed.
+measurement, red: autoencoder alarms. In the soiling and derate panels the alarms stop shortly after the fault is
+fixed (the score still covers the last hours of the fault).
 
 ![fault examples](docs/img/fault_examples.png)
 
@@ -84,27 +120,25 @@ have their own problems: the ambient temperature sensor reads exactly 0 °F for 
 is stuck at zero much of the time.
 
 **Setup.** No fault labels exist, so precision and recall cannot be computed. Instead, the detectors learn normal
-behaviour from the healthy year 2017 (thresholds on 20 % of its days) and score 2016, which contains the outage.
-The direction of time does not matter for this purpose: only one healthy year of the same plant is needed. Because
-of the broken sensors, the autoencoder drops the ambient temperature feature and the regression uses module
-temperature without a wind term. Everything else is unchanged from the synthetic experiment: architecture, smoothing,
-and the 99.5 % validation quantile.
+behaviour from the healthy year 2017 (the same 70 / 10 / 20 % split of its days for training, early stopping and
+threshold calibration) and score 2016, which contains the outage. The direction of time does not matter for this
+purpose: only one healthy year of the same plant is needed. Because of the broken sensors, the autoencoder drops the
+ambient temperature feature and the regression uses module temperature without a wind term. Everything else is
+unchanged from the synthetic experiment: architecture, smoothing and the 99.5 % calibration quantile.
 
 | | Time to flag the outage | Alarm episodes outside the outage (2016) |
 |---|---|---|
-| **Autoencoder, PR residual** | 0.5 h | 20 |
+| **Autoencoder, PR residual** | 0.5 h | 22 |
 | Regression (module temperature) | 0.25 h | 29 |
 | Physical model (pvlib) | 0 h | 19 |
 | Inverter error code | **241 h (10 days)** | - |
 
-- **Any expected-power model beats the inverter's own status code by days.** That is the practical lesson here: a
-  zero-output day in full sun is easy to see, but only if someone compares power with irradiance.
-- **The remaining alarms look like weather, not faults.** The autoencoder's two strongest episodes outside the outage
-  fall on broken-cloud days, when the pyranometer and the array see different clouds (below). That is the same
-  failure mode as in the simulation. The autoencoder raises about 1.7 such episodes per month, the regression 2.4.
-- **What cannot be checked:** whether any of the other episodes were real, small faults. The daily performance ratio
-  also drifts down in the two weeks before the outage, and a few late-May alarms coincide with that. Without
-  maintenance logs it is impossible to say whether this was a precursor or just the summer heat.
+- **What this shows is narrow: one event, defined from the data.** A zero-output outage in full sun is flagged within
+  30 minutes of its first bright step by every detector, while the inverter's error code came 10 days later. Any model
+  that compares power with irradiance would do this; it says nothing about subtle faults.
+- **The other alarm episodes cannot be verified.** Without maintenance logs there is no way to tell whether any of
+  them was a real, small fault. The autoencoder's two strongest ones fall on broken-cloud days (below), the same
+  situation that causes false alarms in the simulation.
 
 ![PVDAQ timeline](docs/img/pvdaq34_timeline.png)
 
@@ -165,7 +199,8 @@ Each produces a signed residual (measured minus expected) divided by its robust 
 
 **Autoencoder.** Inputs are windows of 8 consecutive steps (2 hours) of all 9 features, standardised and flattened
 (72 values). Dense encoder 72 → 64 → 32 → **6** and a mirrored decoder, ReLU, MSE loss, Adam (lr 1e-3, weight decay
-1e-5), batch 256, 100 epochs with early stopping on validation days. Training takes about 25 seconds on a laptop CPU.
+1e-5), batch 256, up to 100 epochs, keeping the weights with the lowest loss on separate early-stopping days. Training
+takes about 30 seconds on a laptop CPU.
 The network only ever sees healthy data, so through the narrow bottleneck it learns how power, irradiance, temperature
 and sun position normally go together, and its reconstruction of a faulty window is pulled back towards healthy
 behaviour. Two scores are compared:
@@ -175,14 +210,22 @@ behaviour. Two scores are compared:
 
 **From score to alarm**, identical for every method: average the score over the last 8 daylight steps (absolute value
 of the mean for signed residuals, so consistent offsets accumulate and noise cancels), then raise an alarm above the
-**99.5th percentile of the same score on validation days**. Validation is 20 % of the healthy year's days, held out from
-training, so all methods get the same false-alarm budget without seeing a single fault.
+**99.5th percentile of the same score on calibration days**. The healthy year is split by whole days: 70 % train the
+models, 10 % only decide when the autoencoder stops training (the baselines, which need no stopping rule, are fitted on
+them too), and 20 % calibrate the thresholds and are never seen by any model. Every method therefore flags 0.5 % of
+the calibration steps without seeing a single fault. On the test period that rate is not kept (0.16-1.6 % on seed 42):
+a quantile estimated from about 2,900 calibration steps is noisy, and the test years have different weather. Moving
+the autoencoder's early stopping off the calibration days did not change this. That is why the comparison also uses
+recall at a false-positive rate matched on the healthy test steps.
 
-**Metrics.** Point-wise precision, recall and F1 on the test period, pooled and per fault type. Per-type precision
-uses the healthy steps plus the steps of that type, so all types share the same false positives. Average precision is
-the area under the precision-recall curve of the smoothed score, threshold-free. An event counts as detected when an
-alarm fires while the fault has a labelled effect; time to detection runs from the event's start. False alarms are
-alarm episodes (runs of alarmed steps) that start while no fault is active.
+**Metrics.** Average precision is the area under the precision-recall curve of the smoothed score, threshold-free.
+Recall at a matched rate uses, for every method, the threshold that flags 0.5 % of the healthy test steps. Point-wise
+precision, recall and F1 at the calibrated threshold describe the operating point. Per-type metrics use the healthy
+steps plus the steps of that type; inverter derating (148 affected steps in three events) and shading (106 steps, 97 of
+them in one event) are small classes, so their per-type numbers rest on few events. An event counts as detected when
+at least half of its affected daylight steps raise an alarm, and the chance level of that count comes from alarms
+shifted by whole days. Time to detection runs from the event's start to the first alarmed affected step of a detected
+event. False alarms are alarm episodes (runs of alarmed steps) that start while no fault is active.
 
 **No tuning on the test plant.** Design choices were made on separate development simulations (seeds 7 and 8): the
 PR-residual score, bottleneck size 6 (12 or 16 let the network reconstruct the faults too: average precision fell from
@@ -195,8 +238,12 @@ PR units). Seed 42 and the sweep seeds 1-5 were run once with those settings.
 - **Simulated data.** The network learns the simulator's physics, and the faults are clean, one at a time and
   idealised. Real plants add data gaps, curtailment, snow, degradation, grid outages, overlapping faults and much
   messier sensors. The results rank methods under controlled conditions; they are not field accuracy.
-- **Faults are frequent**: about 40 % of the evaluated test steps are positive, far more than in a real fleet, so
-  precision is optimistic. False alarms per 30 healthy days is the more transferable number.
+- **Faults are frequent**: 28 % of the evaluated test steps are positive (6,497 of 23,271), far more than in a real
+  fleet, so precision is optimistic. False alarms per 30 healthy days is the more transferable number.
+- **The clear-sky index comes from the simulator's own clear-sky model**, which a real plant could only approximate.
+  Without it (`python -m pv_anomaly ablation`, `results/ablation_kc.csv`) the autoencoder's average precision drops
+  only from 0.91 to 0.88, still above every baseline, but its recall at the matched rate falls from 0.56 to 0.45 and
+  its detected events from 15 to 8 of 17, so much of the event-level lead on seed 42 depends on this feature.
 - **Plant-level signals only.** Inverter- or string-level data would make string outages and derating much easier to
   see. A real deployment would also compare neighbouring inverters.
 - **Clean training year assumed.** Training on data that already contains faults is not tested.
@@ -217,7 +264,8 @@ python -m pv_anomaly run
 (per-type and per-event metrics, false alarms, training history, `run.json`), the charts in `docs/img/` and the
 trained network in `models/autoencoder.pt`. The whole run takes about 40 seconds on a laptop CPU.
 `python -m pv_anomaly run --no-train` scores with the saved model, and `python -m pv_anomaly sweep --seeds 1 2 3 4 5`
-repeats the experiment on other simulated plants (about 3 minutes). `python -m pv_anomaly real` downloads PVDAQ
+repeats the experiment on other simulated plants (a few minutes), `python -m pv_anomaly ablation` retrains the
+autoencoder without the clear-sky index, and `python -m pv_anomaly real` downloads PVDAQ
 system 34 (8 MB, cached in `data/pvdaq/`, not part of the repository) and writes `results/pvdaq_34/` and its charts
 in about two minutes on the first run, download included. `--help` lists all options (window, bottleneck,
 smoothing, threshold quantile, seed, periods).
@@ -227,11 +275,11 @@ Everything is seeded (`--seed 42` by default) and runs on the CPU.
 src/pv_anomaly/
   plant.py        plant definition, solar geometry, 'true' physical model
   simulate.py     stochastic weather, fault schedule and injection
-  features.py     features, train/validation/test split, sliding windows
+  features.py     features, train / early-stopping / calibration / test split, sliding windows
   baselines.py    PR threshold, ASTM E2848 regression, pvlib physical model
   autoencoder.py  dense window autoencoder: training, scoring, save/load
   detect.py       smoothing and threshold calibration
-  evaluate.py     labels, point/event metrics, time to detection, false alarms
+  evaluate.py     labels, point/event metrics, chance level, matched-rate recall, false alarms
   pvdaq.py        NREL PVDAQ download and loader (units, time zone, sensor dropouts)
   plots.py        charts
   cli.py          command line interface

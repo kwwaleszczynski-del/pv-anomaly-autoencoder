@@ -55,3 +55,13 @@ def test_split_masks_train_after_test():
     m = split_masks(index, "Etc/GMT+8", "2018-01-01", train_start="2017-01-01", seed=0)
     local = index.tz_convert("Etc/GMT+8")
     assert (local[m["test"]].year == 2016).all() and (local[m["train"] | m["val"]].year == 2017).all()
+
+
+def test_split_masks_stopping_days():
+    index = pd.date_range("2021-01-01", "2022-12-31", freq="15min", tz="Europe/Warsaw").tz_convert("UTC")
+    plain = split_masks(index, "Europe/Warsaw", "2022-01-01", val_frac=0.2, seed=3)
+    m = split_masks(index, "Europe/Warsaw", "2022-01-01", val_frac=0.2, seed=3, stop_frac=0.1)
+    assert ((m["train"].astype(int) + m["val"] + m["stop"] + m["test"]) == 1).all()
+    assert (m["val"] == plain["val"]).all()  # calibration days do not depend on the stopping split
+    assert abs(m["stop"].sum() / (m["train"] | m["stop"] | m["val"]).sum() - 0.1) < 0.01
+    assert not plain["stop"].any()

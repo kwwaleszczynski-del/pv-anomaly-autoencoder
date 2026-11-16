@@ -1,0 +1,6 @@
+method,chance_detected_mean,chance_detected_max,chance_any_hit_mean,chance_any_hit_max,test_fpr
+pr_threshold,0.0833,1,7.75,9,0.0134
+regression,0.0833,1,6.5,9,0.0016
+physical,0.1667,1,7.75,11,0.0038
+autoencoder,1.5833,3,9.6667,13,0.0159
+autoencoder_mse,0.0833,1,6.5,8,0.0067

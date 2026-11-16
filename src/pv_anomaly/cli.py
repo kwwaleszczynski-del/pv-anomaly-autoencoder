@@ -6,10 +6,12 @@ Usage:
     python -m pv_anomaly run --no-train                       # score with the saved models/autoencoder.pt
     python -m pv_anomaly sweep --seeds 1 2 3 4 5              # repeat the experiment on other simulated plants
     python -m pv_anomaly real --system 34                     # real data: NREL PVDAQ system 34 (downloads ~8 MB)
+    python -m pv_anomaly ablation                             # autoencoder with and without the clear-sky index
     python -m pv_anomaly run --help
 
-The first year is healthy and used for training (80 % of days) and threshold calibration (20 % of days, never
-trained on); faults are injected from --train-end on and everything after it is the test period.
+The first year is healthy: 70 % of its days train the models, 10 % stop the autoencoder's training early and 20 %
+calibrate the thresholds (never seen by any model). Faults are injected from --train-end on and everything after it
+is the test period.
 Data go to ./data (override with --data-dir or PV_ANOMALY_DATA_DIR), results to ./results, charts to ./docs/img
 and the trained model to ./models.
 """
@@ -30,13 +32,15 @@ from pv_anomaly import plots, pvdaq
 from pv_anomaly.autoencoder import AEConfig, AutoencoderDetector
 from pv_anomaly.baselines import BASELINES, PhysicalBaseline, RegressionBaseline
 from pv_anomaly.detect import calibrate, smooth
-from pv_anomaly.evaluate import (event_metrics, false_alarms, ground_truth, point_metrics, pr_curve,
-                                 summarize_events)
+from pv_anomaly.evaluate import (event_metrics, false_alarms, ground_truth, matched_recall, placebo_events,
+                                 point_metrics, pr_curve, precision_by_type, summarize_events)
 from pv_anomaly.features import FEATURES, build_features, split_masks
 from pv_anomaly.plant import PlantConfig
 from pv_anomaly.simulate import simulate
 
 log = logging.getLogger("pv_anomaly")
+VAL_FRAC, STOP_FRAC = 0.2, 0.1  # calibration and early-stopping shares of the healthy days
+INTEGRATION = (1, 8, 16)  # smoothing lengths compared at equal integration time
 
 
 def cmd_simulate(args, save: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -50,54 +54,74 @@ def cmd_simulate(args, save: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
     return df, events
 
 
-def experiment(args, df: pd.DataFrame, events: pd.DataFrame, ae: AutoencoderDetector | None = None) -> dict:
-    """Fit all detectors on the healthy year, calibrate thresholds on validation days, evaluate on the test period."""
+def experiment(args, df: pd.DataFrame, events: pd.DataFrame, ae: AutoencoderDetector | None = None,
+               features: tuple[str, ...] = FEATURES) -> dict:
+    """Fit all detectors on the healthy year, calibrate thresholds on held-out healthy days, evaluate on the test
+    period."""
     plant = PlantConfig()
     feats = build_features(df, plant)
-    masks = split_masks(df.index, plant.tz, args.train_end, val_frac=0.2, seed=args.seed)
+    masks = split_masks(df.index, plant.tz, args.train_end, val_frac=VAL_FRAC, seed=args.seed, stop_frac=STOP_FRAC)
     day = feats["daylight"].to_numpy()
     truth = ground_truth(df, day)
 
     raw, signed = {}, {}
-    for B in BASELINES:
-        model = B(plant).fit(df, masks["train"] & day)
+    for B in BASELINES:  # the baselines have no early stopping and are fitted on the stopping days too
+        model = B(plant).fit(df, (masks["train"] | masks["stop"]) & day)
         raw[model.name], signed[model.name] = model.residual_z(df), True
 
     history, t_train = [], time.time()
     if ae is None:
-        ae = AutoencoderDetector(AEConfig(window=args.window, latent=args.latent, epochs=args.epochs, seed=args.seed))
-        history = ae.fit(feats, masks["train"], masks["val"])
+        ae = AutoencoderDetector(AEConfig(window=args.window, latent=args.latent, epochs=args.epochs, seed=args.seed),
+                                 features=features)
+        history = ae.fit(feats, masks["train"], masks["stop"])
     t_train = time.time() - t_train
     raw["autoencoder"], signed["autoencoder"] = ae.score(feats, "pr_residual"), True
     raw["autoencoder_mse"], signed["autoencoder_mse"] = ae.score(feats, "mse"), False
 
     val_day = masks["val"] & day
     test_eval = masks["test"] & truth["evaluated"].to_numpy()
+    healthy_test = test_eval & ~truth["label"].to_numpy()
     res = {"ae": ae, "history": history, "train_seconds": t_train, "masks": masks, "truth": truth, "scores": {},
            "thresholds": {}, "alarms": {}, "curves": {}}
-    pts, evs, fas = [], [], []
+    pts, matched, evs, chance, fas, integ = [], [], [], [], [], []
     for name in raw:
         s = smooth(raw[name], day, args.smooth, signed[name])
         thr = calibrate(s, val_day, args.quantile)
         alarm = (s > thr).fillna(False)
         res["scores"][name], res["thresholds"][name], res["alarms"][name] = s, thr, alarm
         pts += point_metrics(name, alarm, s, truth, masks["test"])
+        matched += matched_recall(name, s, truth, masks["test"])
         evs += event_metrics(name, alarm, events, truth)
-        fas.append(false_alarms(name, alarm, truth, masks["test"]))
+        chance.append({**placebo_events(name, alarm, events, truth, masks["test"]),
+                       "test_fpr": float(alarm.to_numpy()[healthy_test].mean())})
+        fas.append(false_alarms(name, alarm, truth, masks["test"], sky=df["sky"]))
         res["curves"][name] = pr_curve(s.to_numpy()[test_eval], truth["label"].to_numpy()[test_eval])
-    res["points"], res["events"], res["false_alarms"] = pd.DataFrame(pts), pd.DataFrame(evs), pd.DataFrame(fas)
+        # the autoencoder's score is already a mean over its window, the baselines' scores are single steps
+        steps_per_score = ae.config.window if name.startswith("autoencoder") else 1
+        for k in INTEGRATION:
+            sk = s if k == args.smooth else smooth(raw[name], day, k, signed[name])
+            integ.append({"method": name, "smooth": k, "integration_steps": steps_per_score + k - 1,
+                          **precision_by_type(sk, truth, masks["test"])})
+    points = pd.DataFrame(pts).merge(pd.DataFrame(matched), on=["method", "fault"])
+    res["points"], res["events"], res["false_alarms"] = points, pd.DataFrame(evs), pd.DataFrame(fas)
+    res["chance"], res["integration"] = pd.DataFrame(chance), pd.DataFrame(integ)
     res["summary"] = summarize_events(res["events"])
     return res
 
 
 def headline(res: dict) -> pd.DataFrame:
-    """One row per method: pooled point metrics, events detected, false alarms."""
+    """One row per method: threshold-free and matched-rate metrics, events detected against chance, and the
+    operating point that the calibrated threshold actually gives on the test period."""
     p = res["points"][res["points"]["fault"] == "all"].set_index("method")
-    s = res["summary"].groupby("method")[["detected", "events"]].sum()
+    s = res["summary"].groupby("method")[["detected", "detectable", "events"]].sum()
+    c = res["chance"].set_index("method")
     fa = res["false_alarms"].set_index("method")["per_30_days"]
-    return pd.DataFrame({"precision": p["precision"], "recall": p["recall"], "f1": p["f1"],
-                         "avg_precision": p["avg_precision"], "events_detected": s["detected"],
-                         "events": s["events"], "false_alarms_per_30d": fa}).loc[p.index]
+    return pd.DataFrame({"avg_precision": p["avg_precision"], "recall_at_fpr_0.5pct": p["recall_matched"],
+                         "events_detected": s["detected"], "events_detectable": s["detectable"],
+                         "events": s["events"], "events_by_chance": c["chance_detected_mean"],
+                         "events_by_chance_max": c["chance_detected_max"],
+                         "precision": p["precision"], "recall": p["recall"], "f1": p["f1"],
+                         "test_fpr": c["test_fpr"], "false_alarms_per_30d": fa}).loc[p.index]
 
 
 def cmd_run(args):
@@ -120,20 +144,24 @@ def cmd_run(args):
     res["summary"].round(2).to_csv(out / "metrics_events.csv", index=False)
     res["events"].round(2).to_csv(out / "events_detail.csv", index=False)
     res["false_alarms"].round(3).to_csv(out / "false_alarms.csv", index=False)
+    res["integration"].round(4).to_csv(out / "integration.csv", index=False)
+    res["chance"].round(4).to_csv(out / "chance.csv", index=False)
     if res["history"]:
         pd.DataFrame(res["history"]).round(5).to_csv(out / "training_history.csv", index=False)
     head = headline(res)
     head.round(3).to_csv(out / "headline.csv")
     for name, r in head.iterrows():
-        log.info("%-16s F1 %.2f  P %.2f  R %.2f  AP %.2f  events %d/%d  false alarms %.2f per 30 days", name,
-                 r["f1"], r["precision"], r["recall"], r["avg_precision"], r["events_detected"], r["events"],
+        log.info("%-16s AP %.2f  recall@0.5%%FPR %.2f  events %d/%d (chance %.1f)  F1 %.2f  test FPR %.2f %%  "
+                 "false alarms %.2f per 30 days", name, r["avg_precision"], r["recall_at_fpr_0.5pct"],
+                 r["events_detected"], r["events_detectable"], r["events_by_chance"], r["f1"], 100 * r["test_fpr"],
                  r["false_alarms_per_30d"])
 
     img = args.img_dir
     ap = head["avg_precision"].to_dict()
     plots.fault_examples(df, events, res["alarms"]["autoencoder"], img / "fault_examples.png")
-    plots.f1_heatmap(res["points"], img / "f1_by_fault.png")
-    plots.time_to_detection(res["events"], img / "time_to_detection.png")
+    plots.f1_heatmap(res["points"], img / "recall_by_fault.png", value="recall_matched",
+                     title="Recall at a 0.5 % false-positive rate on healthy test steps (higher is better)")
+    plots.time_to_detection(res["events"][res["events"]["labelled_steps"] > 0], img / "time_to_detection.png")
     plots.score_timeline(res["scores"], res["thresholds"], events, res["masks"]["test"], img / "score_timeline.png")
     plots.pr_curves(res["curves"], ap, img / "pr_curves.png")
 
@@ -145,8 +173,10 @@ def cmd_run(args):
                         "train_seconds": round(res["train_seconds"], 1), "trained": not args.no_train},
         "smooth": args.smooth, "quantile": args.quantile, "thresholds": res["thresholds"],
         "steps": {"train": int((masks["train"] & day).sum()), "val": int((masks["val"] & day).sum()),
+                  "stop": int((masks["stop"] & day).sum()),
                   "test_evaluated": int((masks["test"] & truth["evaluated"].to_numpy()).sum()),
-                  "test_positive": int((masks["test"] & truth["label"].to_numpy()).sum())},
+                  "test_positive": int((masks["test"] & truth["evaluated"].to_numpy()
+                                        & truth["label"].to_numpy()).sum())},
         "events": int(len(events)), "runtime_seconds": round(time.time() - t_start, 1),
         "torch": torch.__version__, "numpy": np.__version__,
     }, indent=2, default=str))
@@ -163,8 +193,9 @@ def cmd_sweep(args):
         head = headline(experiment(args, df, events)).reset_index()
         head.insert(0, "seed", seed)
         rows.append(head)
-        log.info("seed %d: autoencoder F1 %.2f, regression F1 %.2f", seed,
-                 head.set_index("method").loc["autoencoder", "f1"], head.set_index("method").loc["regression", "f1"])
+        h = head.set_index("method")
+        log.info("seed %d: autoencoder AP %.2f, regression AP %.2f", seed, h.loc["autoencoder", "avg_precision"],
+                 h.loc["regression", "avg_precision"])
     allrows = pd.concat(rows, ignore_index=True)
     args.results_dir.mkdir(parents=True, exist_ok=True)
     allrows.round(4).to_csv(args.results_dir / "sweep_seeds.csv", index=False)
@@ -172,7 +203,24 @@ def cmd_sweep(args):
     stats.columns = [f"{a}_{b}" for a, b in stats.columns]
     stats.round(3).to_csv(args.results_dir / "sweep_summary.csv")
     log.info("sweep over seeds %s:\n%s", args.seeds,
-             stats[["f1_mean", "f1_std", "avg_precision_mean", "avg_precision_std"]].round(2).to_string())
+             stats[["avg_precision_mean", "avg_precision_std", "recall_at_fpr_0.5pct_mean", "f1_mean"]].round(2)
+             .to_string())
+
+
+def cmd_ablation(args):
+    """The clear-sky index is computed with the simulator's own clear-sky model, which a real plant would only
+    approximate: retrain the autoencoder without it and compare."""
+    torch.manual_seed(args.seed)
+    df, events = cmd_simulate(args, save=False)
+    rows = []
+    for label, feats in (("all features", FEATURES), ("without clear-sky index", tuple(f for f in FEATURES
+                                                                                       if f != "kc"))):
+        head = headline(experiment(args, df, events, features=feats)).loc[["autoencoder", "autoencoder_mse"]]
+        rows.append(head.reset_index().assign(features=label))
+    out = pd.concat(rows, ignore_index=True)
+    args.results_dir.mkdir(parents=True, exist_ok=True)
+    out.round(4).to_csv(args.results_dir / "ablation_kc.csv", index=False)
+    log.info("ablation:\n%s", out[["features", "method", "avg_precision", "recall_at_fpr_0.5pct"]].round(3).to_string())
 
 
 def _episodes(alarm: np.ndarray, ratio: pd.Series, mask: np.ndarray, outage: np.ndarray) -> pd.DataFrame:
@@ -199,8 +247,8 @@ def cmd_real(args):
     df = pvdaq.load(files, plant)
     feats = build_features(df, plant)
     day = feats["daylight"].to_numpy()
-    masks = split_masks(df.index, plant.tz, args.train_end, val_frac=0.2, seed=args.seed,
-                        train_start=args.train_start)
+    masks = split_masks(df.index, plant.tz, args.train_end, val_frac=VAL_FRAC, seed=args.seed,
+                        train_start=args.train_start, stop_frac=STOP_FRAC)
     test = masks["test"] & day
 
     # this site's ambient temperature sensor and anemometer are unreliable (long runs of 0 degF, stuck at 0 mph):
@@ -208,11 +256,11 @@ def cmd_real(args):
     reg = RegressionBaseline(plant, temp="t_mod", wind=False)
     raw = {}
     for model in (reg, PhysicalBaseline(plant)):
-        raw[model.name] = model.fit(df, masks["train"] & day).residual_z(df)
+        raw[model.name] = model.fit(df, (masks["train"] | masks["stop"]) & day).residual_z(df)
     ae = AutoencoderDetector(AEConfig(window=args.window, latent=args.latent, epochs=args.epochs, seed=args.seed),
                              features=tuple(f for f in FEATURES if f != "t_amb"))
     t_train = time.time()
-    history = ae.fit(feats, masks["train"], masks["val"])
+    history = ae.fit(feats, masks["train"], masks["stop"])
     t_train = time.time() - t_train
     raw["autoencoder"] = ae.score(feats)
 
@@ -319,7 +367,7 @@ def main(argv=None):
     p.add_argument("--results-dir", type=Path, default=Path("results"))
     p.add_argument("--img-dir", type=Path, default=Path("docs/img"))
     p.add_argument("--model", type=Path, default=Path("models/autoencoder_pvdaq34.pt"))
-    for name in ("simulate", "run", "sweep"):
+    for name in ("simulate", "run", "sweep", "ablation"):
         p = sub.add_parser(name)
         p.add_argument("--start", default="2021-01-01", help="first simulated day (local time)")
         p.add_argument("--end", default="2024-01-01", help="day after the last simulated day")
@@ -330,12 +378,12 @@ def main(argv=None):
             p.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3, 4, 5])
         else:
             p.add_argument("--seed", type=int, default=42, help="seed for weather, faults, split and network")
-        if name in ("run", "sweep"):
+        if name in ("run", "sweep", "ablation"):
             p.add_argument("--window", type=int, default=8, help="autoencoder window, 15-min steps")
             p.add_argument("--latent", type=int, default=6, help="autoencoder bottleneck size")
             p.add_argument("--epochs", type=int, default=100)
             p.add_argument("--smooth", type=int, default=8, help="daylight steps averaged before thresholding")
-            p.add_argument("--quantile", type=float, default=0.995, help="threshold quantile on validation days")
+            p.add_argument("--quantile", type=float, default=0.995, help="threshold quantile on calibration days")
             p.add_argument("--results-dir", type=Path, default=Path("results"))
         if name == "run":
             p.add_argument("--model", type=Path, default=Path("models/autoencoder.pt"))
@@ -343,7 +391,8 @@ def main(argv=None):
             p.add_argument("--img-dir", type=Path, default=Path("docs/img"))
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
-    {"simulate": cmd_simulate, "run": cmd_run, "sweep": cmd_sweep, "real": cmd_real}[args.cmd](args)
+    {"simulate": cmd_simulate, "run": cmd_run, "sweep": cmd_sweep, "real": cmd_real,
+     "ablation": cmd_ablation}[args.cmd](args)
 
 
 if __name__ == "__main__":

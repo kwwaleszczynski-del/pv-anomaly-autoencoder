@@ -1,0 +1,5 @@
+method,avg_precision,recall_at_fpr_0.5pct,events_detected,events_detectable,events,events_by_chance,events_by_chance_max,precision,recall,f1,test_fpr,false_alarms_per_30d,features
+autoencoder,0.9115,0.562,15,17,20,1.5833,3,0.9443,0.6936,0.7997,0.0159,3.048,all features
+autoencoder_mse,0.5997,0.161,5,17,20,0.0833,1,0.9097,0.1753,0.294,0.0067,1.1264,all features
+autoencoder,0.8768,0.4501,8,17,20,0.9167,2,0.9515,0.5319,0.6824,0.0105,2.4516,without clear-sky index
+autoencoder_mse,0.5296,0.1282,5,17,20,0.0,0,0.9034,0.131,0.2288,0.0054,1.2589,without clear-sky index

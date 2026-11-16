@@ -81,8 +81,8 @@ def fault_examples(df: pd.DataFrame, events: pd.DataFrame, alarm: pd.Series, pat
     _save(fig, path)
 
 
-def f1_heatmap(points: pd.DataFrame, path: Path, value: str = "f1"):
-    """Point-wise F1 per method (rows) and fault type (columns), numbers printed in the cells."""
+def f1_heatmap(points: pd.DataFrame, path: Path, value: str = "f1", title: str | None = None):
+    """A point-wise metric (F1 by default) per method (rows) and fault type (columns), numbers in the cells."""
     order = [m for m in METHODS if m in set(points["method"])]
     cols = ["all", *FAULT_TYPES]
     t = points.pivot(index="method", columns="fault", values=value).loc[order, cols]
@@ -100,13 +100,13 @@ def f1_heatmap(points: pd.DataFrame, path: Path, value: str = "f1"):
     ax.grid(False)
     for s in ax.spines.values():
         s.set_visible(False)
-    ax.set_title(f"Point-wise {value.upper() if value == 'f1' else value} on the test period (higher is better)",
-                 loc="left")
+    ax.set_title(title or f"Point-wise {value} on the test period (higher is better)", loc="left")
     _save(fig, path)
 
 
 def time_to_detection(ev: pd.DataFrame, path: Path, methods=("autoencoder", "regression", "physical")):
-    """Time from fault start to the first alarm, one dot per event; missed events drawn at the right edge."""
+    """Time from fault start to the first alarm of a detected event (at least half of its affected steps flagged),
+    one dot per event; events that were not detected are drawn at the right edge."""
     ev = ev[ev["method"].isin(methods)]
     finite = ev["ttd_hours"].dropna() / 24
     xmax = max(30.0, float(finite.max()) * 1.15) if len(finite) else 30.0
@@ -120,13 +120,17 @@ def time_to_detection(ev: pd.DataFrame, path: Path, methods=("autoencoder", "reg
         ax.scatter(days[hit], y[hit], s=36, color=METHODS[m][1], edgecolor="white", linewidth=1, zorder=3,
                    label=_label(m))
         ax.scatter(np.full((~hit).sum(), xmax), y[~hit], s=40, marker="x", color=METHODS[m][1], zorder=3)
+        for yy, cnt in zip(*np.unique(y[~hit], return_counts=True)):
+            if cnt > 1:  # several missed events of one type sit on top of each other
+                ax.text(xmax - 0.4, yy, f"{cnt}x", ha="right", va="center", fontsize=7, color=MUTED)
     ax.axvline(xmax, color=GRID, lw=1)
     ax.text(xmax, len(FAULT_TYPES) - 0.45, "missed ", ha="right", va="bottom", color=MUTED, fontsize=8)
     ax.set_yticks(range(len(FAULT_TYPES)), [FAULT_LABELS[k] for k in FAULT_TYPES])
     ax.set_ylim(len(FAULT_TYPES) - 0.5, -0.5)
     ax.set_xlim(-0.5, xmax * 1.02)
     ax.set_xlabel("Days from fault start to first alarm")
-    ax.set_title("Time to detection per injected event", loc="left", pad=22)
+    ax.set_title("Time to detection per injected event (detected = at least half of the affected steps flagged)",
+                 loc="left", pad=22)
     ax.legend(loc="lower left", bbox_to_anchor=(0, 1.0), ncol=len(methods), fontsize=8)
     _save(fig, path)
 

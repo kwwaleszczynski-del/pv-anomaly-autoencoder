@@ -1,7 +1,7 @@
 """From raw scores to alarms: causal smoothing over daylight points and a threshold set on healthy data.
 
-The same post-processing is applied to every detector so that they are compared at the same false-alarm budget:
-the threshold is the `q` quantile of the smoothed score on validation days (healthy, never used for training).
+The same post-processing is applied to every detector, so that each flags the same share of calibration steps:
+the threshold is the `q` quantile of the smoothed score on calibration days (healthy, never seen by any model).
 
 Usage:
     from pv_anomaly.detect import smooth, calibrate
@@ -26,5 +26,5 @@ def smooth(raw: pd.Series, daylight, k: int, signed: bool) -> pd.Series:
 
 
 def calibrate(score: pd.Series, mask, q: float) -> float:
-    """Threshold = `q` quantile of `score` over `mask` (healthy validation points)."""
+    """Threshold = `q` quantile of `score` over `mask` (healthy calibration points)."""
     return float(np.nanquantile(score[np.asarray(mask, bool)], q))

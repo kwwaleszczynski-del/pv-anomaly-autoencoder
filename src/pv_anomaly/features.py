@@ -44,16 +44,20 @@ def build_features(df: pd.DataFrame, plant: PlantConfig) -> pd.DataFrame:
 
 
 def split_masks(index: pd.DatetimeIndex, tz: str, train_end: str, val_frac: float = 0.2,
-                seed: int = 0, train_start: str | None = None) -> dict[str, np.ndarray]:
-    """Boolean masks ``train``, ``val`` (random whole local days of [`train_start`, `train_end`)) and ``test``
-    (all other days)."""
+                seed: int = 0, train_start: str | None = None, stop_frac: float = 0.0) -> dict[str, np.ndarray]:
+    """Boolean masks over whole local days of [`train_start`, `train_end`): ``val`` (random `val_frac` of the days,
+    for threshold calibration), ``stop`` (another random `stop_frac`, for early stopping, so that the network never
+    sees the calibration days) and ``train`` (the rest); ``test`` is all other days."""
     day = index.tz_convert(tz).normalize().tz_localize(None)
     before = (day < pd.Timestamp(train_end)) & (day >= pd.Timestamp(train_start or day.min()))
     days = np.unique(day[before])
     rng = np.random.default_rng(seed)
     val_days = rng.choice(days, size=int(round(val_frac * len(days))), replace=False)
+    rest = np.setdiff1d(days, val_days)
+    stop_days = rng.choice(rest, size=int(round(stop_frac * len(days))), replace=False)
     val = np.asarray(before & day.isin(val_days))
-    return {"train": np.asarray(before) & ~val, "val": val, "test": ~np.asarray(before)}
+    stop = np.asarray(before & day.isin(stop_days))
+    return {"train": np.asarray(before) & ~val & ~stop, "val": val, "stop": stop, "test": ~np.asarray(before)}
 
 
 def make_windows(X: np.ndarray, window: int) -> tuple[np.ndarray, np.ndarray]:
